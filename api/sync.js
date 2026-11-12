@@ -4,17 +4,18 @@ const SB_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
 const SB_KEY = process.env.SUPABASE_SERVICE_KEY;
 const ROLES = ['Giorgio', 'Lucia'];
 const enc = encodeURIComponent;
-
+ 
 const RE_ID = /^[a-z0-9]{8,40}$/;
 const RE_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const RE_KEY = /^\d{4}-\d{2}-\d{2}\/(train|meals\/[a-z_]+\/(sel|done|prop))$/;
-
+ 
 async function sb(path, opt = {}) {
   const r = await fetch(`${SB_URL}/rest/v1/${path}`, {
     ...opt,
     headers: {
       apikey: SB_KEY,
-      Authorization: `Bearer ${SB_KEY}`,
+      // le nuove chiavi "sb_secret_..." non sono JWT: vanno solo in apikey
+      ...(SB_KEY && SB_KEY.startsWith('sb_') ? {} : { Authorization: `Bearer ${SB_KEY}` }),
       'Content-Type': 'application/json',
       ...(opt.headers || {})
     }
@@ -23,20 +24,20 @@ async function sb(path, opt = {}) {
   const t = await r.text();
   return t ? JSON.parse(t) : null;
 }
-
+ 
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') return res.status(405).json({ error: 'method' });
   if (!SB_URL || !SB_KEY) return res.status(500).json({ error: 'Variabili SUPABASE_URL / SUPABASE_SERVICE_KEY mancanti' });
-
+ 
   const b = req.body || {};
   const { a, room, dev } = b;
   if (!RE_ID.test(room || '') || !RE_ID.test(dev || '')) return res.status(400).json({ error: 'bad request' });
-
+ 
   try {
     const claims = await sb(`diet_devices?room=eq.${enc(room)}&select=role,dev`);
     const mine = claims.filter(c => c.dev === dev).map(c => c.role);
-
+ 
     /* --- Profilo: uno solo per telefono, uno solo per ruolo --- */
     if (a === 'claim') {
       const role = b.role;
@@ -51,15 +52,15 @@ module.exports = async (req, res) => {
       });
       return res.status(200).json({ ok: true });
     }
-
+ 
     if (a === 'release') {
       await sb(`diet_devices?room=eq.${enc(room)}&role=eq.${enc(b.role || '')}&dev=eq.${enc(dev)}`, { method: 'DELETE' });
       return res.status(200).json({ ok: true });
     }
-
+ 
     /* Da qui in poi serve un profilo reclamato da questo telefono */
     if (!mine.length) return res.status(403).json({ error: 'noclaim', noclaim: true });
-
+ 
     if (a === 'read') {
       const since = RE_DATE.test(b.since || '') ? b.since : '0000-00-00';
       let rows = [];
@@ -70,7 +71,7 @@ module.exports = async (req, res) => {
       }
       return res.status(200).json({ ok: true, rows });
     }
-
+ 
     if (a === 'write') {
       const owner = b.owner;
       const ops = Array.isArray(b.ops) ? b.ops : [];
@@ -96,7 +97,7 @@ module.exports = async (req, res) => {
         sb(`diet_cells?room=eq.${enc(room)}&owner=eq.${enc(owner)}&k=eq.${enc(o.k)}`, { method: 'DELETE' })));
       return res.status(200).json({ ok: true });
     }
-
+ 
     return res.status(400).json({ error: 'action' });
   } catch (e) {
     return res.status(500).json({ error: String(e.message || e) });
